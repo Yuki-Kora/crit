@@ -7,6 +7,7 @@ import (
 
 	"github.com/tomasz-tomczyk/crit/internal/session"
 	"github.com/tomasz-tomczyk/crit/internal/story"
+	"github.com/tomasz-tomczyk/crit/internal/vcs"
 )
 
 // handleStory serves GET/POST/DELETE /api/story (spec §6, §7.1, §9 Phase 5).
@@ -54,14 +55,20 @@ func (s *Server) handleStoryPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sess := s.session.Load()
+	if _, ok := sess.VCS.(*vcs.P4VCS); ok {
+		sess.RefreshFileList()
+		sess.SyncWorkingTree()
+		sess.RefreshDiffs()
+	}
 	scope := sess.StoryScope(sess.IgnorePatterns)
-	_, indexed, ignored := story.FromScope(scope)
+	in, indexed, ignored := story.FromScope(scope)
+	fingerprint := in.Fingerprint(indexed)
 
 	res, ingestErr := story.Run(story.Ingest{
 		Story:           req.Story,
 		Indexed:         indexed,
 		Ignored:         ignored,
-		LiveFingerprint: story.Fingerprint(indexed),
+		LiveFingerprint: fingerprint,
 	})
 	if ingestErr != nil {
 		// Body shape matches exactly what `crit story`'s printCoverage prints
@@ -74,6 +81,10 @@ func (s *Server) handleStoryPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if in.Perforce {
+		req.Story.BaseSHA = in.BaseSHA
+		req.Story.ScopeFingerprint = fingerprint
+	}
 	sess.SetStory(req.Story)
 	if err := sess.SyncWriteFiles(); err != nil {
 		http.Error(w, fmt.Sprintf("saving story: %v", err), http.StatusInternalServerError)

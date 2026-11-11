@@ -199,6 +199,10 @@ func (s *Server) handlePicker(w http.ResponseWriter, r *http.Request) {
 	sess := s.session.Load()
 	v, repoRoot, focus := sess.PickerContext()
 	resp.Current = focus
+	if _, ok := v.(*vcs.P4VCS); ok {
+		writeJSON(w, resp)
+		return
+	}
 	if v != nil {
 		resp.DefaultBranchName = v.DefaultBranch()
 	}

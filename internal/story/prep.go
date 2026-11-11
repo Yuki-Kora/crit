@@ -1,7 +1,11 @@
 package story
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -18,9 +22,10 @@ type PrepHunk struct {
 
 // PrepFile is a changed file with its hunks for prep rendering.
 type PrepFile struct {
-	Path   string
-	Status string // "modified", "added", ...
-	Hunks  []PrepHunk
+	Path    string
+	OldPath string
+	Status  string // "modified", "added", ...
+	Hunks   []PrepHunk
 }
 
 // PrepInput is everything BuildPrep needs, decoupled from the session/diff
@@ -28,6 +33,7 @@ type PrepFile struct {
 type PrepInput struct {
 	BaseSHA        string
 	HeadSHA        string // empty for working-tree scopes
+	Perforce       bool
 	CommitMessages []string
 	Files          []PrepFile
 }
@@ -68,7 +74,7 @@ func BuildPrep(in PrepInput) Prep {
 		}
 	}
 
-	fingerprint := Fingerprint(indexed)
+	fingerprint := in.Fingerprint(indexed)
 
 	// The prep text opens with the scope snapshot so an author reading the prep
 	// file (via --prep) can copy base_sha / head_sha / scope_fingerprint into
@@ -79,12 +85,19 @@ func BuildPrep(in PrepInput) Prep {
 	b.WriteString(fmt.Sprintf("head_sha: %s\n", in.HeadSHA))
 	b.WriteString(fmt.Sprintf("scope_fingerprint: %s\n\n", fingerprint))
 	if len(in.CommitMessages) > 0 {
-		b.WriteString("=== COMMITS ===\n")
+		if in.Perforce {
+			b.WriteString("=== CHANGELIST DESCRIPTION ===\n")
+		} else {
+			b.WriteString("=== COMMITS ===\n")
+		}
 		for _, m := range in.CommitMessages {
 			b.WriteString(m)
 			b.WriteString("\n")
 		}
 		b.WriteString("\n")
+	}
+	if in.Perforce {
+		writeFilesWithoutHunks(&b, in.Files)
 	}
 	b.WriteString(hunks.String())
 
@@ -94,6 +107,40 @@ func BuildPrep(in PrepInput) Prep {
 		HeadSHA:          in.HeadSHA,
 		ScopeFingerprint: fingerprint,
 		Indexed:          indexed,
+	}
+}
+
+// Fingerprint tracks content as well as hunk positions for a mutable P4
+// changelist. An edit can keep every hunk at the same line number.
+func (in PrepInput) Fingerprint(indexed []HunkID) string {
+	if !in.Perforce {
+		return Fingerprint(indexed)
+	}
+	files := append([]PrepFile(nil), in.Files...)
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	hash := sha256.New()
+	_ = json.NewEncoder(hash).Encode(files)
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func writeFilesWithoutHunks(b *strings.Builder, files []PrepFile) {
+	headerWritten := false
+	for _, file := range files {
+		if len(file.Hunks) != 0 {
+			continue
+		}
+		if !headerWritten {
+			b.WriteString("=== FILES WITHOUT TEXT HUNKS ===\n")
+			headerWritten = true
+		}
+		fmt.Fprintf(b, "%s [%s]", file.Path, file.Status)
+		if file.OldPath != "" {
+			fmt.Fprintf(b, " (from %s)", file.OldPath)
+		}
+		b.WriteByte('\n')
+	}
+	if headerWritten {
+		b.WriteByte('\n')
 	}
 }
 

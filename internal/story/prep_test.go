@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+func TestPerforcePrepFingerprintIncludesHunkContent(t *testing.T) {
+	input := PrepInput{Perforce: true, BaseSHA: "#have", Files: []PrepFile{
+		{Path: "inventory.cpp", Status: "modified", Hunks: []PrepHunk{
+			{OldStart: 3, Header: "@@ -3 +3 @@", Body: "-old\n+new"},
+		}},
+		{Path: "Icon.uasset", Status: "modified"},
+	}}
+	first := BuildPrep(input)
+	if !strings.Contains(first.Text, "Icon.uasset [modified]") || len(first.Indexed) != 1 {
+		t.Fatalf("prep = %#v", first)
+	}
+	input.Files[0].Hunks[0].Body = "-old\n+different"
+	second := BuildPrep(input)
+	if len(second.Indexed) != 1 || first.Indexed[0] != second.Indexed[0] {
+		t.Fatal("changing hunk content changed the hunk ID")
+	}
+	if first.ScopeFingerprint == second.ScopeFingerprint {
+		t.Fatal("changing hunk content did not change the scope fingerprint")
+	}
+}
+
 func TestBuildPrep_HunkSectionsAndIDs(t *testing.T) {
 	in := PrepInput{
 		BaseSHA:        "base123",

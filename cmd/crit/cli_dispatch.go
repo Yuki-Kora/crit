@@ -365,6 +365,8 @@ Options:
   -q, --quiet                 On success, suppress connect/start status, tips, and session summary
       --share-url <url>       Share service URL (e.g. https://crit.md or self-hosted)
       --base-branch <branch>  Base branch to diff against (overrides auto-detection)
+      --vcs <name>            Select a backend (git, sl, jj, or p4)
+      --change <number>       Pending Perforce changelist (or default, with --vcs p4)
       --scope <mode>          Diff scope for PR/MR review: layer (default) or full-stack
       --session <id>          Reconnect to an existing review session (from stderr or next_command)
       --forge <provider>      Select pull/push provider: auto, github, or gitlab

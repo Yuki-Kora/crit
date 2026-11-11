@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"github.com/tomasz-tomczyk/crit/internal/session"
-	"github.com/tomasz-tomczyk/crit/internal/vcs"
 )
 
 // CreateSession builds the review session for a daemon from resolved CLI config.
@@ -19,7 +18,7 @@ func CreateSession(sc *DaemonCLIConfig) (*Session, error) {
 	var sess *Session
 	var err error
 	if len(sc.Files) == 0 {
-		v := vcs.DetectVCS(sc.VCSOverride)
+		v := sc.Backend()
 		if v == nil {
 			return nil, fmt.Errorf("not in a version-controlled repository and no files specified")
 		}

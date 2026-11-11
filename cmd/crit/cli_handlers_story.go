@@ -111,7 +111,8 @@ Diff scope options:
       --base-branch <branch> Override auto-detected base branch
       --output, -o <dir>     Crit data root for reviews (default: ~/.crit)
       --scope <mode>         PR diff scope: layer or full-stack
-      --vcs <name>           VCS backend: git, sl, or jj
+      --vcs <name>           VCS backend: git, sl, jj, or p4
+      --change <number>     Pending Perforce changelist (or default, with --vcs p4)
 
 Default generation uses global agent_cmd from ~/.crit.config.json. The agent
 must be able to read the generated prep file and print raw story JSON.`)
@@ -119,7 +120,7 @@ must be able to read the generated prep file and print raw story JSON.`)
 
 // scopeValueFlags take a value and are forwarded to the daemon config resolver.
 var scopeValueFlags = map[string]struct{}{
-	"--pr": {}, "--mr": {}, "--range": {}, "--base-branch": {}, "--scope": {}, "--vcs": {}, "--output": {}, "-o": {},
+	"--pr": {}, "--mr": {}, "--range": {}, "--base-branch": {}, "--scope": {}, "--vcs": {}, "--change": {}, "--output": {}, "-o": {},
 }
 
 // parseStoryFlags splits `crit story` args into story-only flags and the
@@ -212,6 +213,11 @@ func runStoryE(args []string) error {
 	if f.guide {
 		return runStoryGuide(f, critPath)
 	}
+	if cj.Story != nil && cj.Story.BaseSHA == vcs.PerforceHaveRef && (!f.refresh || f.noSpend) {
+		if err := checkPendingStory(f.scopeArgs, cj.Story); err != nil {
+			return err
+		}
+	}
 
 	switch {
 	case f.storyFile != "":
@@ -223,6 +229,18 @@ func runStoryE(args []string) error {
 	default:
 		return runStoryLLM(f, critPath, cj)
 	}
+}
+
+func checkPendingStory(scopeArgs []string, saved *session.Story) error {
+	scope, err := buildStoryScope(scopeArgs)
+	if err != nil {
+		return err
+	}
+	in, indexed, _ := story.FromScope(scope)
+	if saved.ScopeFingerprint != in.Fingerprint(indexed) {
+		return clicmd.ExitError{Code: 1, Err: errors.New("Perforce changelist changed since the story was generated; rerun crit story with --refresh")}
+	}
+	return nil
 }
 
 func clearStory(f storyFlags, critPath string) error {
@@ -272,11 +290,7 @@ func resolveStoryReviewPath(scopeArgs []string) (string, error) {
 		return "", clicmd.ExitError{Code: 1, Err: err}
 	}
 
-	branch := ""
-	if v := vcs.DetectVCS(reviewCfg.VCSOverride); v != nil {
-		branch = v.CurrentBranch()
-	}
-	key := daemon.SessionKey(cwd, branch, session.FocusKeyArgs(reviewCfg))
+	key := daemon.SessionKey(cwd, reviewCfg.ReviewBranch(), session.FocusKeyArgs(reviewCfg))
 	if entry, alive := storyDaemonAlive(key); alive && entry.ReviewPath != "" {
 		return entry.ReviewPath, nil
 	}
@@ -323,7 +337,9 @@ func buildStoryScope(scopeArgs []string) (session.StoryScope, error) {
 	}
 	server.ApplySessionOverrides(sess, dsc)
 	scope := sess.StoryScope(dsc.IgnorePatterns)
-	fillStoryPRContext(&scope)
+	if dsc.Perforce == nil {
+		fillStoryPRContext(&scope)
+	}
 	return scope, nil
 }
 
@@ -507,17 +523,22 @@ func runStoryIngestFile(f storyFlags, critPath string, cj review.CritJSON) error
 	if err != nil {
 		return err
 	}
-	_, indexed, ignored := story.FromScope(scope)
+	in, indexed, ignored := story.FromScope(scope)
+	fingerprint := in.Fingerprint(indexed)
 
 	res, ingestErr := story.Run(story.Ingest{
 		Story:           &st,
 		Indexed:         indexed,
 		Ignored:         ignored,
-		LiveFingerprint: story.Fingerprint(indexed),
+		LiveFingerprint: fingerprint,
 	})
 	printCoverage(res.Coverage)
 	if ingestErr != nil {
 		return clicmd.ExitError{Code: 1, Err: ingestErr}
+	}
+	if in.Perforce {
+		st.BaseSHA = in.BaseSHA
+		st.ScopeFingerprint = fingerprint
 	}
 
 	return saveStory(f, critPath, &st)
@@ -611,12 +632,20 @@ func runStoryLLM(f storyFlags, critPath string, cj review.CritJSON) error {
 	}
 
 	// Ingest against the live diff scope (same validation as --story-file).
-	_, indexed, ignored := story.FromScope(scope)
+	if prepIn.Perforce {
+		scope, err = buildStoryScope(f.scopeArgs)
+		if err != nil {
+			return err
+		}
+		st.BaseSHA = prep.BaseSHA
+		st.ScopeFingerprint = prep.ScopeFingerprint
+	}
+	in, indexed, ignored := story.FromScope(scope)
 	res, ingestErr := story.Run(story.Ingest{
 		Story:           st,
 		Indexed:         indexed,
 		Ignored:         ignored,
-		LiveFingerprint: story.Fingerprint(indexed),
+		LiveFingerprint: in.Fingerprint(indexed),
 	})
 	printCoverage(res.Coverage)
 	if ingestErr != nil {
@@ -753,11 +782,7 @@ func resolveStorySessionKey(scopeArgs []string) string {
 	if err != nil {
 		return ""
 	}
-	branch := ""
-	if v := vcs.DetectVCS(reviewCfg.VCSOverride); v != nil {
-		branch = v.CurrentBranch()
-	}
-	return daemon.SessionKey(cwd, branch, session.FocusKeyArgs(reviewCfg))
+	return daemon.SessionKey(cwd, reviewCfg.ReviewBranch(), session.FocusKeyArgs(reviewCfg))
 }
 
 // saveStory sets the story on the review JSON, persists it via SaveCritJSON,
@@ -803,11 +828,7 @@ func storyReviewSessionKey(f storyFlags) (key, cwd string, err error) {
 	if err != nil {
 		return "", "", fmt.Errorf("could not resolve cwd for the review UI: %w", err)
 	}
-	branch := ""
-	if v := vcs.DetectVCS(reviewCfg.VCSOverride); v != nil {
-		branch = v.CurrentBranch()
-	}
-	return daemon.SessionKey(cwd, branch, session.FocusKeyArgs(reviewCfg)), cwd, nil
+	return daemon.SessionKey(cwd, reviewCfg.ReviewBranch(), session.FocusKeyArgs(reviewCfg)), cwd, nil
 }
 
 // postIngest connects the freshly-saved story to a review surface (§4.1). If a

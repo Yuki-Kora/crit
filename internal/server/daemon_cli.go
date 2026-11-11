@@ -45,6 +45,7 @@ type DaemonCLIConfig struct {
 	PlanName                    string
 	ReviewPath                  string
 	VCSOverride                 string
+	Perforce                    *vcs.P4VCS
 	Cfg                         config.Config
 	Focus                       *session.Focus
 	RemoteFiles                 bool
@@ -70,6 +71,7 @@ type daemonFlagSet struct {
 	noIgnore                    bool
 	baseBranch                  string
 	vcsOverride                 string
+	p4Change                    string
 	planDir                     string
 	planName                    string
 	fileArgs                    []string
@@ -102,7 +104,8 @@ func parseDaemonFlags(args []string) daemonFlagSet {
 	fs.BoolVar(quiet, "q", false, "On success, suppress connect/start status, tips, and session summary (shorthand)")
 	noIgnore := fs.Bool("no-ignore", false, "Disable all ignore patterns from config files")
 	baseBranch := fs.String("base-branch", "", "Base branch to diff against (overrides auto-detection)")
-	vcsFlag := fs.String("vcs", "", "VCS backend to use: git, sl/sapling, jj/jujutsu (default: auto-detect)")
+	vcsFlag := fs.String("vcs", "", "VCS backend to use: git, sl/sapling, jj/jujutsu, p4 (default: auto-detect)")
+	p4Change := fs.String("change", "", "Review a pending Perforce changelist (number or default, with --vcs p4)")
 	planDir := fs.String("plan-dir", "", "")
 	planName := fs.String("name", "", "")
 	changeSpec := ""
@@ -167,6 +170,7 @@ func parseDaemonFlags(args []string) daemonFlagSet {
 		noIgnore:                    *noIgnore,
 		baseBranch:                  *baseBranch,
 		vcsOverride:                 *vcsFlag,
+		p4Change:                    *p4Change,
 		planDir:                     *planDir,
 		planName:                    *planName,
 		fileArgs:                    fs.Args(),
@@ -252,7 +256,18 @@ func ResolveDaemonCLIConfig(args []string) (*DaemonCLIConfig, error) { //nolint:
 	}
 
 	configDir := ""
-	v := vcs.DetectVCS(sf.vcsOverride)
+	var v vcs.VCS
+	var p4 *vcs.P4VCS
+	if sf.vcsOverride == "p4" {
+		var err error
+		p4, err = openPendingChangelist(sf)
+		if err != nil {
+			return nil, err
+		}
+		v = p4
+	} else {
+		v = vcs.DetectVCS(sf.vcsOverride)
+	}
 	repoRoot := ""
 	if v != nil {
 		configDir, _ = v.RepoRoot()
@@ -262,6 +277,21 @@ func ResolveDaemonCLIConfig(args []string) (*DaemonCLIConfig, error) { //nolint:
 		configDir = daemonMustGetwd()
 	}
 	cfg := config.LoadConfigForCommands(configDir)
+	vcsOverride := resolveVCSOverride(sf.vcsOverride, cfg.VCS)
+	if vcsOverride == "p4" {
+		if p4 == nil {
+			var err error
+			p4, err = openPendingChangelist(sf)
+			if err != nil {
+				return nil, err
+			}
+			v = p4
+			repoRoot, _ = p4.RepoRoot()
+		}
+		cfg.BaseBranch = ""
+	} else if sf.p4Change != "" {
+		return nil, errors.New("--change requires --vcs p4")
+	}
 
 	applyDaemonConfigDefaults(&sf, cfg)
 	if sf.shareURLSet {
@@ -338,7 +368,8 @@ func ResolveDaemonCLIConfig(args []string) (*DaemonCLIConfig, error) { //nolint:
 		Files:                       sf.fileArgs,
 		PlanDir:                     sf.planDir,
 		PlanName:                    sf.planName,
-		VCSOverride:                 resolveVCSOverride(sf.vcsOverride, cfg.VCS),
+		VCSOverride:                 vcsOverride,
+		Perforce:                    p4,
 		Cfg:                         cfg,
 		Focus:                       f,
 		RemoteFiles:                 remoteFiles,
@@ -350,6 +381,21 @@ func ResolveDaemonCLIConfig(args []string) (*DaemonCLIConfig, error) { //nolint:
 	}, nil
 }
 
+func openPendingChangelist(sf daemonFlagSet) (*vcs.P4VCS, error) {
+	if sf.changeForge != "" || sf.rangeSpec != "" || sf.scopeSpec != "" || sf.remoteFiles ||
+		sf.baseBranch != "" || len(sf.fileArgs) > 0 || sf.planDir != "" || sf.liveOrigin != "" || sf.previewFile != "" {
+		return nil, errors.New("--vcs p4 reviews a pending changelist; use --change without Git diff or file scopes")
+	}
+	return vcs.NewP4VCS(daemonMustGetwd(), sf.p4Change)
+}
+
+func (sc *DaemonCLIConfig) Backend() vcs.VCS {
+	if sc.Perforce != nil {
+		return sc.Perforce
+	}
+	return vcs.DetectVCS(sc.VCSOverride)
+}
+
 // PreflightCheck runs pre-spawn checks for default git mode (no files, no
 // focus, no plan). Returns a user-facing message to print on stderr if the
 // daemon should not be spawned, or "" if everything looks fine.
@@ -357,7 +403,7 @@ func PreflightCheck(sc *DaemonCLIConfig) string {
 	if sc == nil {
 		return ""
 	}
-	v := vcs.DetectVCS(sc.VCSOverride)
+	v := sc.Backend()
 	if v == nil {
 		return "Not in a version-controlled repository.\n\n" +
 			"  crit              review changed files (run inside a git/sapling/jj repo)\n" +
@@ -386,6 +432,9 @@ func PreflightCheck(sc *DaemonCLIConfig) string {
 // DiffScope is NOT part of the key — the picker must let users toggle scopes
 // within a single session.
 func FocusKeyArgs(sc *DaemonCLIConfig) []string {
+	if sc != nil && sc.Perforce != nil {
+		return sc.Perforce.SessionKeyArgs()
+	}
 	if sc == nil || sc.Focus == nil || sc.Focus.Kind != session.FocusRange {
 		if sc == nil {
 			return nil

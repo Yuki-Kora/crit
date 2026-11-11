@@ -1326,15 +1326,19 @@ func findChange(changes []vcs.FileChange, path string) (vcs.FileChange, bool) {
 // lines comments anchor to; other files are read from disk. Deleted files
 // have no content.
 func (s *Session) liveFileContent(path string, f *FileEntry, fc vcs.FileChange, repoRoot string) (content, hash string) {
-	if fc.Status == "deleted" {
+	if fc.Status == "deleted" || fc.Binary {
 		return "", ""
 	}
 	if f != nil {
 		// Orphaned and deleted entries have no content; a file that came back
 		// is read from disk below.
 		s.mu.RLock()
+		metadataOnly := f.FileType == "binary"
 		live := !f.Orphaned && f.AbsPath != "" && f.Status != "deleted"
 		s.mu.RUnlock()
+		if metadataOnly {
+			return "", ""
+		}
 		if live && s.ensureFileLoaded(f) == nil {
 			s.mu.RLock()
 			defer s.mu.RUnlock()
@@ -1352,6 +1356,10 @@ func (s *Session) liveFileContent(path string, f *FileEntry, fc vcs.FileChange, 
 // cached hunks are built (populateEagerFile): a deleted file has none, so the
 // UI shows its placeholder. Returns nil when the diff fails.
 func liveAllHunks(fc vcs.FileChange, content, baseRef, repoRoot string, ignoreWhitespace bool, vc vcs.VCS) []vcs.DiffHunk {
+	if isPerforceVCS(vc) {
+		hunks, _ := vc.FileDiffUnified(fc.Path, baseRef, repoRoot, ignoreWhitespace)
+		return hunks
+	}
 	if fc.Status == "deleted" {
 		return nil
 	}

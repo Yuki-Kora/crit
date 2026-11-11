@@ -1,6 +1,10 @@
 package session
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/tomasz-tomczyk/crit/internal/vcs"
+)
 
 // CLIReviewConfig holds parsed review CLI flags for RunReview.
 type CLIReviewConfig struct {
@@ -13,6 +17,7 @@ type CLIReviewConfig struct {
 	Quiet              bool
 	NoIntegrationCheck bool
 	VCSOverride        string
+	Perforce           *vcs.P4VCS
 	BaseBranch         string
 	IgnorePatterns     []string
 	SessionID          string
@@ -25,6 +30,9 @@ var (
 
 // FocusKeyArgs returns daemon session key file args for PR/range focus.
 func FocusKeyArgs(sc *CLIReviewConfig) []string {
+	if sc != nil && sc.Perforce != nil {
+		return sc.Perforce.SessionKeyArgs()
+	}
 	if sc == nil || sc.Focus == nil || sc.Focus.Kind != FocusRange {
 		if sc == nil {
 			return nil
@@ -38,4 +46,14 @@ func FocusKeyArgs(sc *CLIReviewConfig) []string {
 		return []string{PRFocusKey(sc.Focus.ChangeNumber, sc.Focus.RemoteBaseProject, sc.Focus.RemoteHost)}
 	}
 	return []string{fmt.Sprintf("range:%s..%s", sc.Focus.BaseSHA, sc.Focus.HeadSHA)}
+}
+
+func (sc *CLIReviewConfig) ReviewBranch() string {
+	if sc.Perforce != nil {
+		return sc.Perforce.CurrentBranch()
+	}
+	if v := vcs.DetectVCS(sc.VCSOverride); v != nil {
+		return v.CurrentBranch()
+	}
+	return ""
 }

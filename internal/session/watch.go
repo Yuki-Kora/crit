@@ -31,8 +31,9 @@ func (s *Session) RefreshDiffs() {
 		content string
 	}
 	snapshots := make([]fileSnapshot, 0, len(s.Files))
+	perforce := isPerforceVCS(s.VCS)
 	for _, f := range s.Files {
-		if f.Status == "deleted" || f.Lazy {
+		if f.FileType == "binary" || f.Lazy || (f.Status == "deleted" && !perforce) {
 			continue
 		}
 		snapshots = append(snapshots, fileSnapshot{
@@ -54,7 +55,7 @@ func (s *Session) RefreshDiffs() {
 	results := make([]diffResult, 0, len(snapshots))
 	for _, snap := range snapshots {
 		var hunks []vcs.DiffHunk
-		if snap.status == "added" || snap.status == "untracked" {
+		if (snap.status == "added" || snap.status == "untracked") && !perforce {
 			hunks = vcs.FileDiffUnifiedNewFile(snap.content)
 		} else if vc != nil {
 			h, err := vc.FileDiffUnified(snap.path, baseRef, repoRoot, false)
@@ -149,6 +150,11 @@ func (s *Session) RefreshFileList() {
 			// Phantoms are created without AbsPath; fill it in on reuse.
 			u.entry.AbsPath = u.absPath
 		}
+		if u.binary {
+			setMetadataOnly(u.entry)
+		} else if u.entry.FileType == "binary" {
+			u.entry.FileType = detectFileType(u.entry.Path)
+		}
 	}
 	s.Files = built.files
 	critPath := s.critJSONPath()
@@ -171,6 +177,7 @@ type fileListUpdate struct {
 	oldPath string // set FileEntry.OldPath when non-empty (rename)
 	newPath string // when set, retarget Path/AbsPath (rename handoff)
 	absPath string
+	binary  bool
 }
 
 type refreshedFileList struct {
@@ -188,7 +195,7 @@ func buildRefreshedFileList(existing map[string]*FileEntry, changes []vcs.FileCh
 		absPath := filepath.Join(repoRoot, fc.Path)
 		if f, ok := existing[fc.Path]; ok {
 			out.updates = append(out.updates, fileListUpdate{
-				entry: f, status: fc.Status, oldPath: fc.OldPath, absPath: absPath,
+				entry: f, status: fc.Status, oldPath: fc.OldPath, absPath: absPath, binary: fc.Binary,
 			})
 			out.files = append(out.files, f)
 			delete(existing, fc.Path)
@@ -207,6 +214,7 @@ func buildRefreshedFileList(existing map[string]*FileEntry, changes []vcs.FileCh
 					oldPath: fc.OldPath,
 					newPath: fc.Path,
 					absPath: absPath,
+					binary:  fc.Binary,
 				})
 				out.files = append(out.files, old)
 				delete(existing, fc.OldPath)
@@ -225,7 +233,9 @@ func buildRefreshedFileList(existing map[string]*FileEntry, changes []vcs.FileCh
 			Comments: []Comment{},
 		}
 
-		if len(changes) > lazyFileThreshold && i >= lazyFileThreshold {
+		if fc.Binary {
+			setMetadataOnly(fe)
+		} else if len(changes) > lazyFileThreshold && i >= lazyFileThreshold {
 			fe.Lazy = true
 			if ns, ok := numstats[fc.Path]; ok {
 				fe.LazyAdditions = ns.Additions

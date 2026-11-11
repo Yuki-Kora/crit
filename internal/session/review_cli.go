@@ -10,7 +10,6 @@ import (
 	"github.com/tomasz-tomczyk/crit/internal/clicmd"
 	"github.com/tomasz-tomczyk/crit/internal/config"
 	"github.com/tomasz-tomczyk/crit/internal/daemon"
-	"github.com/tomasz-tomczyk/crit/internal/vcs"
 )
 
 var (
@@ -62,11 +61,7 @@ func RunReview(args []string) error {
 			weStartedDaemon = true
 		}
 	} else {
-		branch := ""
-		if v := vcs.DetectVCS(sc.VCSOverride); v != nil {
-			branch = v.CurrentBranch()
-		}
-		key = daemon.SessionKey(cwd, branch, FocusKeyArgs(sc))
+		key = daemon.SessionKey(cwd, sc.ReviewBranch(), FocusKeyArgs(sc))
 
 		entry, alive = daemon.FindAliveSession(key)
 		if alive {

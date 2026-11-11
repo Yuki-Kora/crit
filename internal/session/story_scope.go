@@ -30,6 +30,7 @@ type StoryScopeLine struct {
 // StoryScopeFile is a changed file plus its hunks in the current diff scope.
 type StoryScopeFile struct {
 	Path    string
+	OldPath string
 	Status  string
 	Hunks   []StoryScopeHunk
 	Ignored bool // matched an ignore_patterns entry
@@ -76,6 +77,7 @@ func (s *Session) StoryScope(ignorePatterns []string) StoryScope {
 	s.mu.RUnlock()
 
 	scope := StoryScope{BaseSHA: baseRef}
+	perforce := isPerforceVCS(vc)
 
 	// HeadSHA is meaningful only for fixed-range scopes (--pr/--mr/--range). For a
 	// working-tree scope it stays empty (the tree is the head).
@@ -106,7 +108,9 @@ func (s *Session) StoryScope(ignorePatterns []string) StoryScope {
 	// BaseRef is often a branch ref like "main"; the persisted Story and the
 	// prompt variables want a pinned SHA. rev-parse failures leave the ref
 	// as-is rather than blocking the scope.
-	scope.BaseSHA = resolveSHA(repoRoot, scope.BaseSHA)
+	if !perforce {
+		scope.BaseSHA = resolveSHA(repoRoot, scope.BaseSHA)
+	}
 	if scope.HeadSHA != "" {
 		scope.HeadSHA = resolveSHA(repoRoot, scope.HeadSHA)
 	}
@@ -120,9 +124,10 @@ func (s *Session) StoryScope(ignorePatterns []string) StoryScope {
 		_ = s.ensureFileLoaded(fe)
 		s.mu.RLock()
 		f := StoryScopeFile{
-			Path:   fe.Path,
-			Status: fe.Status,
-			Hunks:  convertHunks(fe.DiffHunks),
+			Path:    fe.Path,
+			OldPath: fe.OldPath,
+			Status:  fe.Status,
+			Hunks:   convertHunks(fe.DiffHunks),
 		}
 		s.mu.RUnlock()
 		scope.Files = append(scope.Files, f)
@@ -160,7 +165,7 @@ func ignoredStoryScopeFiles(ignorePatterns []string, focus Focus, baseRef, repoR
 		} else {
 			hunks, _ = diffHunksForFile(fc.Path, fc.OldPath, fc.Status, baseRef, repoRoot, false, vc)
 		}
-		out = append(out, StoryScopeFile{Path: fc.Path, Status: fc.Status, Hunks: convertHunks(hunks), Ignored: true})
+		out = append(out, StoryScopeFile{Path: fc.Path, OldPath: fc.OldPath, Status: fc.Status, Hunks: convertHunks(hunks), Ignored: true})
 	}
 	return out
 }

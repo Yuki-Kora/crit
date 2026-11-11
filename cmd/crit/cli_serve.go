@@ -38,7 +38,7 @@ func serveSessionKey(sc *server.DaemonCLIConfig) string {
 		return previewSessionKey(cwd, sc.PreviewFile)
 	}
 	branch := ""
-	if vcs := DetectVCS(sc.VCSOverride); vcs != nil {
+	if vcs := sc.Backend(); vcs != nil {
 		branch = vcs.CurrentBranch()
 	}
 	return sessionKey(cwd, branch, server.FocusKeyArgs(sc))
@@ -154,7 +154,7 @@ func runServe(args []string) {
 	}
 	key := serveSessionKey(sc)
 	branch := ""
-	if vcs := DetectVCS(sc.VCSOverride); vcs != nil {
+	if vcs := sc.Backend(); vcs != nil {
 		branch = vcs.CurrentBranch()
 	}
 	sc.ReviewPath, err = resolveServeReviewPath(sc.OutputDir, sc.PlanDir, key)
@@ -167,10 +167,15 @@ func runServe(args []string) {
 		cliArgs = []string{"live", sc.LiveOrigin}
 	case sc.PreviewFile != "":
 		cliArgs = []string{"preview", sc.PreviewFile}
+	case sc.Perforce != nil:
+		cliArgs = sc.Perforce.ReviewArgs()
 	default:
 		cliArgs = sc.Files
 	}
 	sessionArgs := sc.Files
+	if sc.Perforce != nil {
+		sessionArgs = cliArgs
+	}
 	if sc.LiveOrigin != "" {
 		sessionArgs = []string{liveSessionArgsTag, sc.LiveOrigin}
 	}
@@ -247,7 +252,9 @@ func runServe(args []string) {
 		go openBrowser(openURL, sc.OpenCmd)
 	}
 
-	srv.PrimePRListCache(ctx)
+	if sc.Perforce == nil {
+		srv.PrimePRListCache(ctx)
+	}
 
 	type sessionResult struct {
 		session *Session
@@ -284,14 +291,7 @@ func runServe(args []string) {
 		return
 	}
 	server.ApplySessionOverrides(sess, sc)
-	switch {
-	case sc.LiveOrigin != "":
-		sess.CLIArgs = []string{"live", sc.LiveOrigin}
-	case sc.PreviewFile != "":
-		sess.CLIArgs = []string{"preview", sc.PreviewFile}
-	default:
-		sess.CLIArgs = sc.Files
-	}
+	sess.CLIArgs = cliArgs
 	sess.SessionKey = key
 	sess.CWD = cwd
 

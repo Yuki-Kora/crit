@@ -186,6 +186,7 @@ func init() {
 			Quiet:              sc.Quiet,
 			NoIntegrationCheck: sc.NoIntegrationCheck,
 			VCSOverride:        sc.VCSOverride,
+			Perforce:           sc.Perforce,
 			BaseBranch:         sc.BaseBranch,
 			IgnorePatterns:     sc.IgnorePatterns,
 			SessionID:          sc.SessionID,
@@ -194,6 +195,7 @@ func init() {
 	session.PreflightCheckFn = func(sc *session.CLIReviewConfig) string {
 		return server.PreflightCheck(&server.DaemonCLIConfig{
 			VCSOverride:    sc.VCSOverride,
+			Perforce:       sc.Perforce,
 			BaseBranch:     sc.BaseBranch,
 			IgnorePatterns: sc.IgnorePatterns,
 		})

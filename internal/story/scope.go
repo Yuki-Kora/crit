@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/tomasz-tomczyk/crit/internal/session"
+	"github.com/tomasz-tomczyk/crit/internal/vcs"
 )
 
 // FromScope converts a session's neutral StoryScope snapshot into the inputs
@@ -13,6 +14,7 @@ func FromScope(scope session.StoryScope) (PrepInput, []HunkID, []HunkID) {
 	in := PrepInput{
 		BaseSHA:        scope.BaseSHA,
 		HeadSHA:        scope.HeadSHA,
+		Perforce:       scope.BaseSHA == vcs.PerforceHaveRef,
 		CommitMessages: scope.CommitMessages,
 	}
 	var indexed, ignored []HunkID
@@ -24,7 +26,7 @@ func FromScope(scope session.StoryScope) (PrepInput, []HunkID, []HunkID) {
 			}
 			continue
 		}
-		pf := PrepFile{Path: f.Path, Status: f.Status}
+		pf := PrepFile{Path: f.Path, OldPath: f.OldPath, Status: f.Status}
 		for _, h := range f.Hunks {
 			indexed = append(indexed, HunkID{FilePath: f.Path, OldStart: h.OldStart})
 			pf.Hunks = append(pf.Hunks, PrepHunk{

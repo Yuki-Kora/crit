@@ -322,14 +322,14 @@ func (fe *FileEntry) ensureLoaded(s *Session, repoRoot, baseRef string, v vcs.VC
 			}
 			content = string(data)
 			hash = fileHash(data)
-
-			if fe.Status == "added" || fe.Status == "untracked" {
-				hunks = vcs.FileDiffUnifiedNewFile(content)
-			} else {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				hunks = fe.diffHunks(ctx, repoRoot, baseRef, v)
-			}
+		}
+		perforce := isPerforceVCS(v)
+		if (fe.Status == "added" || fe.Status == "untracked") && !perforce {
+			hunks = vcs.FileDiffUnifiedNewFile(content)
+		} else if fe.Status != "deleted" || perforce {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			hunks = fe.diffHunks(ctx, repoRoot, baseRef, v)
 		}
 
 		s.finishLoad(fe, content, hash, hunks)
@@ -403,13 +403,18 @@ func diffHunksForFile(path, oldPath, status, baseRef, repoRoot string, ignoreWhi
 }
 
 func diffHunksForFileCtx(ctx context.Context, path, oldPath, status, baseRef, repoRoot string, ignoreWhitespace bool, v vcs.VCS) ([]vcs.DiffHunk, error) {
-	if status == "renamed" && oldPath != "" {
+	if status == "renamed" && oldPath != "" && !isPerforceVCS(v) {
 		return vcs.FileDiffUnifiedCtx(ctx, path, oldPath, baseRef, repoRoot, ignoreWhitespace)
 	}
 	if v != nil {
 		return v.FileDiffUnifiedCtx(ctx, path, baseRef, repoRoot, ignoreWhitespace)
 	}
 	return vcs.FileDiffUnifiedCtx(ctx, path, "", baseRef, repoRoot, ignoreWhitespace)
+}
+
+func isPerforceVCS(v vcs.VCS) bool {
+	_, ok := v.(*vcs.P4VCS)
+	return ok
 }
 
 // Session is the top-level state manager for a multi-file review.
@@ -725,6 +730,10 @@ type CritJSONFile struct {
 // added/untracked files is estimated from the on-disk file. Range/--pr
 // focus must pass false so dirty trees / --remote don't contaminate stats.
 func populateLazyFile(fe *FileEntry, fc vcs.FileChange, numstats map[string]vcs.NumstatEntry, diskFallback bool) {
+	if fc.Binary {
+		setMetadataOnly(fe)
+		return
+	}
 	fe.Lazy = true
 	fe.Comments = []Comment{}
 	if ns, ok := numstats[fc.Path]; ok {
@@ -744,6 +753,10 @@ func populateLazyFile(fe *FileEntry, fc vcs.FileChange, numstats map[string]vcs.
 // The vcs parameter is used for computing diffs; pass nil to fall back to
 // the git package-level functions.
 func populateEagerFile(fe *FileEntry, fc vcs.FileChange, baseRef, root string, vc vcs.VCS) bool {
+	if fc.Binary {
+		setMetadataOnly(fe)
+		return true
+	}
 	if fc.Status != "deleted" {
 		data, err := os.ReadFile(fe.AbsPath)
 		if err != nil {
@@ -753,16 +766,26 @@ func populateEagerFile(fe *FileEntry, fc vcs.FileChange, baseRef, root string, v
 		fe.FileHash = fileHash(data)
 	}
 
-	if fc.Status != "deleted" {
-		if fc.Status == "added" || fc.Status == "untracked" {
-			fe.DiffHunks = vcs.FileDiffUnifiedNewFile(fe.Content)
-		} else {
-			populateEagerFileDiff(fe, fc, baseRef, root, vc)
-		}
+	perforce := isPerforceVCS(vc)
+	if (fc.Status == "added" || fc.Status == "untracked") && !perforce {
+		fe.DiffHunks = vcs.FileDiffUnifiedNewFile(fe.Content)
+	} else if fc.Status != "deleted" || perforce {
+		populateEagerFileDiff(fe, fc, baseRef, root, vc)
 	}
 
 	fe.Comments = []Comment{}
 	return true
+}
+
+func setMetadataOnly(fe *FileEntry) {
+	fe.AbsPath = ""
+	fe.FileType = "binary"
+	fe.Content, fe.FileHash = "", ""
+	fe.DiffHunks = nil
+	fe.Lazy = false
+	if fe.Comments == nil {
+		fe.Comments = []Comment{}
+	}
 }
 
 // populateEagerFileDiff computes diff hunks for an eager-loaded file.
@@ -1264,7 +1287,7 @@ func dirIgnored(full, root string, ignorePatterns []string) bool {
 func filterBinary(changes []vcs.FileChange) []vcs.FileChange {
 	filtered := changes[:0:0]
 	for _, fc := range changes {
-		if !isBinaryExtension(strings.ToLower(filepath.Ext(fc.Path))) {
+		if fc.Binary || !isBinaryExtension(strings.ToLower(filepath.Ext(fc.Path))) {
 			filtered = append(filtered, fc)
 		}
 	}
@@ -2094,6 +2117,10 @@ func (s *Session) EnsureFileEntry(path string) bool {
 
 	if repoRoot == "" {
 		return false
+	}
+	if isPerforceVCS(v) {
+		s.RefreshFileList()
+		return s.FileByPath(path) != nil
 	}
 
 	absPath := filepath.Join(repoRoot, path)
@@ -2971,9 +2998,10 @@ func (s *Session) GetFileSnapshot(path string) (map[string]any, bool) {
 func (s *Session) GetFileSnapshotFromDisk(path string) (map[string]any, bool) {
 	s.mu.RLock()
 	repoRoot := s.RepoRoot
+	vc := s.VCS
 	s.mu.RUnlock()
 
-	if repoRoot == "" {
+	if repoRoot == "" || isPerforceVCS(vc) {
 		return nil, false
 	}
 	clean := filepath.Clean(filepath.FromSlash(path))

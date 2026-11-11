@@ -109,6 +109,22 @@ In our experience, complex PRs (~20–50 files, ~2k–5k lines) land around
 $1–$1.40 with Claude Opus 5. See the **[story mode guide](docs/story-mode.md)**
 for commands, custom prompts, JSON shape, and token-cost notes.
 
+### Perforce changelists
+
+From inside a Perforce workspace with `p4` on PATH, select a pending changelist:
+
+```sh
+crit review --vcs p4 --change 12345
+crit story --vcs p4 --change 12345 --prep story-prep.txt
+crit story --vcs p4 --change 12345 --story-file story.json
+```
+
+Use `--change default` for the default changelist. Crit uses the current
+Perforce client and its have revisions as the baseline. Text edits, additions,
+deletions, and moves appear in the diff. Binary assets appear as file metadata.
+This mode reads workspace changes and stores review comments locally. Shelved
+and submitted changelists are outside this mode's scope.
+
 ### Live mode
 
 `crit live <url>` (or `crit <url>`) proxies a running dev server through Crit's review UI. Crit's iframe loads the app on a different origin/port than your browser tab, so **host-scoped session cookies are not shared automatically**. If the direct URL works but Crit shows a login page or hydration mismatch, forward the upstream cookies:
@@ -393,7 +409,7 @@ All keys are optional — omit any you don't need.
 | `notify_on_round_ready`| bool     | `false`                    | Opt in to a desktop notification when a review round becomes ready for you (after the agent finishes addressing comments). On macOS, install [`terminal-notifier`](https://github.com/julienXX/terminal-notifier) (`brew install terminal-notifier`) so clicking the notification opens the review URL — without it, clicking falls back to AppleScript's `display notification`, which macOS attributes to Script Editor and activates that instead of your browser. |
 | `no_update_check`      | bool     | `false`                    | Don't check for new versions on startup.                                                                                                                                                |
 | `no_integration_check` | bool     | `false`                    | Skip the integration config freshness check on startup.                                                                                                                                 |
-| `vcs`                  | string   | auto-detected              | Preferred VCS backend: `"git"`, `"sl"`, or `"jj"`. When set, crit uses this VCS instead of auto-detecting. Falls back to git if the configured VCS isn't available. Can also be set via `--vcs` CLI flag (flag takes precedence over config). |
+| `vcs`                  | string   | auto-detected              | Preferred VCS backend: `"git"`, `"sl"`, `"jj"`, or `"p4"`. Can also be set via `--vcs` (the flag takes precedence over config). Perforce requires a configured workspace. |
 | `live_cookie`          | string   | `""`                       | Cookie header value forwarded to the upstream app in live mode (e.g. `"_crit_key=..."`). Global or project. Prefer `live_cookie_file` for secrets. |
 | `live_cookie_file`     | string   | `""`                       | Path to a file with upstream cookies for live mode (raw header lines or Netscape jar). Global or project; relative paths resolve from repo root. |
 | `live_cdp_url`         | string   | `""`                       | Chrome DevTools URL (e.g. `http://127.0.0.1:9222`) to reuse browser cookies for the live upstream. Global or project. |
@@ -453,7 +469,8 @@ These keys can only be set in `~/.crit.config.json` (global). Project-level `.cr
 | `--output`      | `-o`  | `output`              | Crit data root for reviews (`<root>/reviews/<key>/`). |
 | `--quiet`       | `-q`  | `quiet`               | On success, suppress connect/start status, tips, and session summary                 |
 | `--base-branch` |       | `base_branch`         | Base branch to diff against            |
-| `--vcs`         |       | `vcs`                 | VCS backend (`git`, `sl`, or `jj`)     |
+| `--vcs`         |       | `vcs`                 | VCS backend (`git`, `sl`, `jj`, or `p4`) |
+| `--change`      |       |                       | Pending changelist number or `default` (Perforce only) |
 | `--no-ignore`   |       |                       | Temporarily bypass all ignore patterns |
 | `--version`     | `-v`  |                       | Print version and exit                 |
 

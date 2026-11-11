@@ -22,6 +22,7 @@ type FileChange struct {
 	Path    string // relative to repo root (new path for renames)
 	OldPath string // previous path when Status is "renamed"
 	Status  string // "added", "modified", "deleted", "renamed", "untracked"
+	Binary  bool   // keep file status but do not load its contents as text
 }
 
 // DiffHunk represents a single hunk in a unified diff.
